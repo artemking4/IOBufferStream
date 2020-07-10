@@ -62,7 +62,7 @@ public:
     }
 };
 
-struct IOBufferStream : std::iostream 
+struct IOBufferStream : private std::iostream 
 {
 private:
     BufferStream _stream;
