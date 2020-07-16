@@ -41,7 +41,15 @@ public:
     }
 
     BufferStream(bufsize_t len = BUF_SIZE_DEFAULT) {
+        if (len == 0)
+            return;
         _bufresize(len);
+    }
+
+    ~BufferStream() {
+
+        if (_buf)
+            delete _buf;
     }
 
     inline char* Data() {
@@ -62,7 +70,7 @@ public:
     }
 };
 
-struct IOBufferStream : private std::iostream 
+struct IOBufferStream : std::iostream 
 {
 private:
     BufferStream _stream;
@@ -79,8 +87,19 @@ public:
         return _stream.Size();
     }
 
+    IOBufferStream(IOBufferStream&& old) : IOBufferStream(old.Data(), old.Size()) { };
+    IOBufferStream operator=(IOBufferStream right) { _stream = BufferStream(right._stream); this->init(&_stream); }
+    void SetBuffer(char* buf, bufsize_t len) { 
+        _stream = BufferStream(buf, len); 
+        this->init(&_stream); 
+    }
+
     inline bufsize_t BytesLeft(bool read = false) {
         return _stream.BytesLeft();
+    }
+
+    inline void Reserve(bufsize_t s) {
+        _stream.Reserve(s);
     }
 
     template <typename T>
