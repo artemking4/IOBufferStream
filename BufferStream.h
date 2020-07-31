@@ -6,7 +6,9 @@ typedef unsigned __int64 bufsize_t;
 typedef unsigned __int32 bufsize_t;
 #endif
 
-constexpr bufsize_t BUF_SIZE_DEFAULT = 512;
+#ifndef BUF_SIZE_DEFAULT
+#define BUF_SIZE_DEFAULT 512
+#endif
 
 struct BufferStream : std::streambuf
 {
@@ -168,4 +170,12 @@ public:
         if (!this->write(str.c_str(), len))
             throw std::exception("Failed writing bytes! Maybe the buffer allocation failed.");
     }
+
+    template<typename T>
+    inline IOBufferStream& operator>>(T& what) { what = Read<T>(); return *this; }
+    template<typename T>
+    inline IOBufferStream& operator<<(T what) { Write<T>(what); return *this; }
+
+    inline IOBufferStream& operator>>(std::string& what) { what = ReadString(); return *this; }
+    inline IOBufferStream& operator<<(std::string what) { WriteString(what); return *this; }
 };
