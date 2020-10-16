@@ -10,65 +10,80 @@ typedef unsigned __int32 bufsize_t;
 #define BUF_SIZE_DEFAULT 512
 #endif
 
+class IOBufferStream;
+
+class IBufSerializable {
+    virtual void Serialize(IOBufferStream* buf);
+    virtual void Deserialize(IOBufferStream* buf);
+};
+
 struct BufferStream : std::streambuf
 {
-private:
-    char* _buf = 0;
-    bufsize_t _buflen = 0;
+protected:
+    std::vector<char> _buf = { };
 
-    void _bufresize(bufsize_t len) {
-        auto oldbuf = _buf;
-        auto oldbuflen = _buflen;
+    void _bufresize(bufsize_t len, bool resetCursors = false) {
+        std::vector<char> newbuf(len);
+        char* data = _buf.data();
+        size_t datalen = _buf.size();
+        std::copy(data, data + datalen, newbuf.data());
 
-        char* newbuf = new char[len];
-
-        if (oldbuf) {
-            std::copy(oldbuf, oldbuf + oldbuflen, newbuf);
+        if (!resetCursors) {
+            this->setg(newbuf.data(), newbuf.data() + (this->gptr() - data), newbuf.data() + newbuf.size()); // Alright, im too lazy to put this shit into variables so punch me in my face later kthxbai
+            this->setp(newbuf.data(), newbuf.data() + (this->pptr() - data), newbuf.data() + newbuf.size());
+        }
+        else {
+            this->setg(newbuf.data(), newbuf.data(), newbuf.data() + newbuf.size());
+            this->setp(newbuf.data(), newbuf.data(), newbuf.data() + newbuf.size());
         }
 
-        _buf = newbuf;
-        _buflen = len;
-
-        this->setg(_buf, _buf + (this->gptr() - oldbuf), _buf + _buflen);
-        this->setp(_buf, _buf + (this->pptr() - oldbuf), _buf + _buflen);
-
-        if(oldbuf)
-            delete[] oldbuf;
+        _buf.swap(newbuf);
     }
 
 public:
-    BufferStream(const char* begin, bufsize_t len) {
-        _bufresize(len);
-        std::memcpy(_buf, begin, len);
+    BufferStream(char* begin, bufsize_t len) {
+        _bufresize(len, true);
+        std::memcpy(begin, _buf.data(), len);
     }
 
     BufferStream(bufsize_t len = BUF_SIZE_DEFAULT) {
         if (len == 0)
             return;
-        _bufresize(len);
+
+        _bufresize(len, true);
     }
 
-    ~BufferStream() {
-
-        if (_buf)
-            delete _buf;
+    inline char* Data() const {
+        return (char*) _buf.data();
     }
 
-    inline char* Data() {
-        return _buf;
+    inline bufsize_t Size() const {
+        return _buf.size();
     }
 
-    inline bufsize_t Size() {
-        return _buflen;
+    inline char* CursorPtr(bool read = false) const {
+        char* ptr = (read) ? this->gptr() : this->pptr();
+        return ptr;
     }
 
-    inline bufsize_t BytesLeft(bool read = false) {
-        bufsize_t left = _buf + _buflen - ((read) ? this->gptr() : this->pptr());
+    inline void AdvanceCursor(size_t len, bool read = false) {
+        if (read)
+            this->setg(_buf.data(), this->gptr() + len, _buf.data() + _buf.size());
+        else
+            this->setp(_buf.data(), this->pptr() + len, _buf.data() + _buf.size());
+    }
+
+    inline bufsize_t BytesLeft(bool read = false) const {
+        bufsize_t left = _buf.data() + _buf.size() - ((read) ? this->gptr() : this->pptr());
         return left;
     }
 
-    void Reserve(bufsize_t bytes) {
-        _bufresize(_buflen + bytes);
+    inline void Reserve(bufsize_t bytes) {
+        _bufresize(_buf.size() + bytes);
+    }
+
+    inline void Resize(bufsize_t bytes) {
+        _bufresize(bytes);
     }
 };
 
@@ -78,30 +93,41 @@ private:
     BufferStream _stream;
 
 public:
-    IOBufferStream(bufsize_t len = BUF_SIZE_DEFAULT) : _stream(len), std::iostream(&_stream) { };
-    IOBufferStream(const char* begin, bufsize_t len) : _stream(begin, len), std::iostream(&_stream) { };
-
-    inline char* Data() {
+    inline char* Data() const {
         return _stream.Data();
     }
 
-    inline bufsize_t Size() {
+    inline bufsize_t Size() const {
         return _stream.Size();
     }
 
-    IOBufferStream(IOBufferStream&& old) : IOBufferStream(old.Data(), old.Size()) { };
-    IOBufferStream operator=(IOBufferStream right) { _stream = BufferStream(right._stream); this->init(&_stream); }
-    void SetBuffer(char* buf, bufsize_t len) { 
-        _stream = BufferStream(buf, len); 
-        this->init(&_stream); 
+    IOBufferStream(bufsize_t len = BUF_SIZE_DEFAULT) : _stream(len), std::iostream(&_stream) { };
+    IOBufferStream(char* begin, bufsize_t len) : _stream(begin, len), std::iostream(&_stream) { };
+    IOBufferStream(IOBufferStream&& old) : _stream((char*) old.Data(), old.Size()), std::iostream(&_stream) { };
+    IOBufferStream(const IOBufferStream& old) : _stream((char*) old.Data(), old.Size()), std::iostream(&_stream) { };
+    void operator=(IOBufferStream right) { 
+        _stream.Resize(right.Size());
+        std::memcpy((char*) right.Data(), _stream.Data(), right.Size());
+    };
+
+    inline char* CursorPtr(bool read = false) const {
+        return _stream.CursorPtr(read);
     }
 
-    inline bufsize_t BytesLeft(bool read = false) {
-        return _stream.BytesLeft();
+    inline void AdvanceCursor(size_t len, bool read = false) {
+        _stream.AdvanceCursor(len, read);
+    }
+
+    inline bufsize_t BytesLeft(bool read = false) const {
+        return _stream.BytesLeft(read);
     }
 
     inline void Reserve(bufsize_t s) {
         _stream.Reserve(s);
+    }
+
+    inline void Resize(bufsize_t s) {
+        _stream.Resize(s);
     }
 
     template <typename T>
@@ -112,6 +138,20 @@ public:
             throw std::out_of_range("Failed reading bytes! Maybe the buffer is too small.");
 
         return var;
+    }
+
+    template <typename T>
+    inline void Read(T& var) {
+        if (!this->read((char*)&var, sizeof(T)))
+            throw std::out_of_range("Failed reading bytes! Maybe the buffer is too small.");
+    }
+
+    template <typename T>
+    inline void ReadArray(T* arr, unsigned int len = 0) {
+        len = len == 0 ? Read<unsigned int>() : len;
+
+        if (!this->read((char*)arr, len * sizeof(T)))
+            throw std::out_of_range("Failed reading bytes! Maybe the buffer is too small.");
     }
 
     template <typename T>
@@ -137,6 +177,14 @@ public:
         return str;
     }
 
+    inline void ReadString(std::string& str, unsigned int len = 0) {
+        len = len == 0 ? Read<unsigned int>() : len;
+
+        str.resize(len);
+        if (!this->read((char*)str.c_str(), len))
+            throw std::out_of_range("Failed reading bytes! Maybe the buffer is too small.");
+    }
+
     template <typename T>
     inline void Write(T var) {
         if (BytesLeft() < sizeof(T))
@@ -153,7 +201,7 @@ public:
         
         if (BytesLeft() < len * sizeof(T))
             _stream.Reserve((len * sizeof(T)) - BytesLeft());
-
+        
         if (!this->write((const char*)arr, len * sizeof(T)))
             throw std::exception("Failed writing bytes! Maybe the buffer allocation failed.");
     }
@@ -175,6 +223,8 @@ public:
     inline IOBufferStream& operator>>(T& what) { what = Read<T>(); return *this; }
     template<typename T>
     inline IOBufferStream& operator<<(T what) { Write<T>(what); return *this; }
+
+    inline IOBufferStream& operator<<(const char* what) { WriteString(what); return *this; }
 
     inline IOBufferStream& operator>>(std::string& what) { what = ReadString(); return *this; }
     inline IOBufferStream& operator<<(std::string what) { WriteString(what); return *this; }
