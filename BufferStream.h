@@ -43,7 +43,7 @@ protected:
 public:
     BufferStream(char* begin, bufsize_t len) {
         _bufresize(len, true);
-        std::memcpy(begin, _buf.data(), len);
+        std::memcpy(_buf.data(), begin, len);
     }
 
     BufferStream(bufsize_t len = BUF_SIZE_DEFAULT) {
@@ -51,6 +51,10 @@ public:
             return;
 
         _bufresize(len, true);
+    }
+    
+    inline auto& RawData() const {
+        return _buf;
     }
 
     inline char* Data() const {
@@ -93,6 +97,10 @@ private:
     BufferStream _stream;
 
 public:
+    inline auto& RawData() const {
+        return _stream.RawData();
+    }
+
     inline char* Data() const {
         return _stream.Data();
     }
@@ -105,10 +113,10 @@ public:
     IOBufferStream(char* begin, bufsize_t len) : _stream(begin, len), std::iostream(&_stream) { };
     IOBufferStream(IOBufferStream&& old) : _stream((char*) old.Data(), old.Size()), std::iostream(&_stream) { };
     IOBufferStream(const IOBufferStream& old) : _stream((char*) old.Data(), old.Size()), std::iostream(&_stream) { };
-    void operator=(IOBufferStream right) { 
+    /* void operator=(IOBufferStream right) { 
         _stream.Resize(right.Size());
         std::memcpy((char*) right.Data(), _stream.Data(), right.Size());
-    };
+    }; */
 
     inline char* CursorPtr(bool read = false) const {
         return _stream.CursorPtr(read);
