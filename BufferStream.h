@@ -1,4 +1,7 @@
 #pragma once
+#include <vector>
+#include <exception>
+#include <iostream>
 
 #ifdef BUFSIZE_64
 typedef unsigned __int64 bufsize_t;
@@ -12,9 +15,14 @@ typedef unsigned __int32 bufsize_t;
 
 class IOBufferStream;
 
-class IBufSerializable {
-    virtual void Serialize(IOBufferStream* buf);
-    virtual void Deserialize(IOBufferStream* buf);
+struct IBufSerializable {
+    virtual void Serialize(IOBufferStream& buf) {
+        throw std::exception("Can not serialize a non-serializable class");
+    }
+
+    virtual void Deserialize(IOBufferStream& buf) {
+        throw std::exception("Can not deserialize a non-deserializable class");
+    }
 };
 
 struct BufferStream : std::streambuf
@@ -26,7 +34,11 @@ protected:
         std::vector<char> newbuf(len);
         char* data = _buf.data();
         size_t datalen = _buf.size();
-        std::copy(data, data + datalen, newbuf.data());
+        if (datalen > len)
+            datalen = len;
+
+        if(data && !resetCursors) 
+            std::copy(data, data + datalen, newbuf.data());
 
         if (!resetCursors) {
             this->setg(newbuf.data(), newbuf.data() + (this->gptr() - data), newbuf.data() + newbuf.size()); // Alright, im too lazy to put this shit into variables so punch me in my face later kthxbai
@@ -111,12 +123,16 @@ public:
 
     IOBufferStream(bufsize_t len = BUF_SIZE_DEFAULT) : _stream(len), std::iostream(&_stream) { };
     IOBufferStream(char* begin, bufsize_t len) : _stream(begin, len), std::iostream(&_stream) { };
-    IOBufferStream(IOBufferStream&& old) : _stream((char*) old.Data(), old.Size()), std::iostream(&_stream) { };
+    IOBufferStream(IOBufferStream&& old) noexcept : _stream((char*) old.Data(), old.Size()), std::iostream(&_stream) { };
     IOBufferStream(const IOBufferStream& old) : _stream((char*) old.Data(), old.Size()), std::iostream(&_stream) { };
-    /* void operator=(IOBufferStream right) { 
+    void operator=(IOBufferStream&& right) { 
         _stream.Resize(right.Size());
-        std::memcpy((char*) right.Data(), _stream.Data(), right.Size());
-    }; */
+        std::memcpy((char*)_stream.Data(), right.Data(), right.Size());
+    };
+    void operator=(const IOBufferStream& right) {
+        _stream.Resize(right.Size());
+        std::memcpy((char*)_stream.Data(), right.Data(), right.Size());
+    };
 
     inline char* CursorPtr(bool read = false) const {
         return _stream.CursorPtr(read);
@@ -148,6 +164,10 @@ public:
         return var;
     }
 
+    inline void Deserialize(IBufSerializable& ser) {
+        ser.Deserialize(*this);
+    }
+
     template <typename T>
     inline void Read(T& var) {
         if (!this->read((char*)&var, sizeof(T)))
@@ -164,12 +184,12 @@ public:
 
     template <typename T>
     inline std::vector<T> ReadArray(unsigned int len = 0) {
-        len = len == 0 ? Read<unsigned int>() : len;
-
         std::vector<T> arr;
+
+        bufsize_t len = len == 0 ? Read<unsigned int>() : len;
+        
         arr.resize(len);
-        if (!this->read((char*)arr.data(), len * sizeof(T)))
-            throw std::out_of_range("Failed reading bytes! Maybe the buffer is too small.");
+        ReadArray<T>((T*)arr.data(), len);
 
         return arr;
     }
@@ -185,12 +205,17 @@ public:
         return str;
     }
 
-    inline void ReadString(std::string& str, unsigned int len = 0) {
+    template <typename T = char, typename... Args>
+    inline void ReadString(std::basic_string<T, Args...> str, unsigned int len = 0) {
         len = len == 0 ? Read<unsigned int>() : len;
 
         str.resize(len);
-        if (!this->read((char*)str.c_str(), len))
+        if (!this->read((char*)str.c_str(), sizeof(T) * len))
             throw std::out_of_range("Failed reading bytes! Maybe the buffer is too small.");
+    }
+
+    inline void Serialize(IBufSerializable& ser) {
+        ser.Serialize(*this);
     }
 
     template <typename T>
@@ -214,21 +239,27 @@ public:
             throw std::exception("Failed writing bytes! Maybe the buffer allocation failed.");
     }
 
-    inline void WriteString(std::string str, unsigned int len = 0, bool writelen = true) {
+    template <typename T = char, typename... Args>
+    inline void WriteString(std::basic_string<T, Args...> str, unsigned int len = 0, bool writelen = true) {
         len = (len == 0) ? str.length() : len;
+        size_t bytelen = len * sizeof(T);
 
         if (writelen)
             Write<unsigned int>(len);
 
-        if (BytesLeft() < len)
-            _stream.Reserve(len - BytesLeft());
+        if (BytesLeft() < bytelen)
+            _stream.Reserve(bytelen - BytesLeft());
 
-        if (!this->write(str.c_str(), len))
+        if (!this->write((char*)str.c_str(), bytelen))
             throw std::exception("Failed writing bytes! Maybe the buffer allocation failed.");
     }
 
+    inline void WriteString(const char* str, unsigned int len = 0, bool writelen = true) {
+        WriteString(std::string(str), len, writelen);
+    }
+
     template<typename T>
-    inline IOBufferStream& operator>>(T& what) { what = Read<T>(); return *this; }
+    inline IOBufferStream& operator>>(T& what) { Read<T>(what); return *this; }
     template<typename T>
     inline IOBufferStream& operator<<(T what) { Write<T>(what); return *this; }
 
